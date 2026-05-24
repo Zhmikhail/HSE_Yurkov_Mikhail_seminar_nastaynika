@@ -1,0 +1,121 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    environment:
+      POSTGRES_DB: oil_analytics
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/bootstrap:/docker-entrypoint-initdb.d:ro
+      - ./sql/init:/sql/init:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d oil_analytics"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: adminadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trino:
+    image: trinodb/trino:475
+    container_name: trino
+    user: root
+    ports:
+      - "8090:8080"
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/demo:/etc/trino/demo:ro
+      - trino_metastore:/tmp/trino-metastore
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "trino --execute 'SELECT 1' >/dev/null 2>&1"]
+      interval: 20s
+      timeout: 30s
+      retries: 12
+      start_period: 30s
+
+  jupyterhub:
+    build:
+      context: ./jupyter
+    container_name: jupyterhub
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: oil_analytics
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: admin
+      MINIO_SECRET_KEY: adminadmin
+      MINIO_BUCKET: oil-lake
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./:/home/jovyan/work
+      - jupyterhub_data:/srv/jupyterhub-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/hub/health', timeout=5)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  superset:
+    build:
+      context: ./superset
+    image: superset:local
+    container_name: superset
+    environment:
+      SUPERSET_SECRET_KEY: "superset_secret"
+      SQLALCHEMY_DATABASE_URI: postgresql+psycopg2://admin:admin@postgres:5432/oil_analytics
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: oil_analytics
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+    ports:
+      - "8088:8088"
+    volumes:
+      - superset_home:/app/superset_home
+      - ./superset:/app/bootstrap:ro
+    command: ["/bin/bash", "/app/bootstrap/run_dashboard_app.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      trino:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  minio_data:
+  superset_home:
+  trino_metastore:
+  jupyterhub_data:

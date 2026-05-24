@@ -1,0 +1,7 @@
+databases:
+  - database_name: Robust Oil Analytics
+    sqlalchemy_uri: postgresql+psycopg2://admin:admin@postgres:5432/oil_analytics
+    expose_in_sqllab: true
+    allow_ctas: true
+    allow_cvas: true
+    allow_dml: true
